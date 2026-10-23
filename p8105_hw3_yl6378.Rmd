@@ -13,6 +13,179 @@ knitr::opts_chunk$set(
 ```
 
 # Problem 1
+## Data description and missing values
+
+```{r load-noaa}
+library(tidyverse)
+library(patchwork)
+
+data("ny_noaa", package = "p8105.datasets")
+
+missing_table =
+  ny_noaa |>
+  summarize(across(everything(), ~ mean(is.na(.x)))) |>
+  pivot_longer(
+    everything(),
+    names_to = "variable",
+    values_to = "missing_fraction"
+  )
+
+missing_table |>
+  mutate(
+    missing_percentage =
+      scales::percent(missing_fraction, accuracy = 0.1)
+  ) |>
+  select(variable, missing_percentage) |>
+  knitr::kable(
+    col.names = c("Variable", "Missing observations")
+  )
+```
+
+The dataset contains `r format(nrow(ny_noaa), big.mark = ",")`
+observations and `r ncol(ny_noaa)` variables from
+`r n_distinct(ny_noaa$id)` weather stations in New York State.
+Each row represents a station-date observation between 1981 and 2010.
+Variables include station ID, date, precipitation, snowfall, snow depth,
+and daily maximum and minimum temperatures.
+
+Missing data are an important limitation. The table shows the percentage
+of missing observations for each variable. Different stations collect
+different subsets of measurements, so available observations differ
+across variables. Summaries below exclude missing measurements.
+
+## Data cleaning and snowfall values
+
+```{r clean-noaa}
+noaa =
+  ny_noaa |>
+  mutate(
+    year = lubridate::year(date),
+    month = lubridate::month(date),
+    day = lubridate::day(date),
+    tmax = as.numeric(tmax) / 10,
+    tmin = as.numeric(tmin) / 10,
+    prcp = prcp / 10
+  )
+
+snow_counts =
+  noaa |>
+  filter(!is.na(snow)) |>
+  count(snow, sort = TRUE)
+
+snow_counts |>
+  slice_head(n = 10) |>
+  knitr::kable(
+    col.names = c("Snowfall (mm)", "Number of observations"),
+    caption = "Ten most commonly observed snowfall values"
+  )
+```
+
+Separate year, month, and day variables were created.
+Maximum and minimum temperatures were converted to degrees Celsius,
+and precipitation was converted to millimeters. Snowfall and snow
+depth were already measured in millimeters.
+
+The most common snowfall value is `r snow_counts$snow[1]` mm,
+with `r format(snow_counts$n[1], big.mark = ",")` observations.
+Zero snowfall is expected to be common because many station-days
+have no snowfall. Common positive values may reflect rounding and
+conversion from measurements originally recorded in inches.
+
+## Average maximum temperatures in January and July
+
+```{r monthly-temperature, fig.width=10, fig.height=5}
+station_temperature =
+  noaa |>
+  filter(month %in% c(1, 7)) |>
+  group_by(id, year, month) |>
+  summarize(
+    observed_days = sum(!is.na(tmax)),
+    mean_tmax = if (all(is.na(tmax))) {
+      NA_real_
+    } else {
+      mean(tmax, na.rm = TRUE)
+    },
+    .groups = "drop"
+  ) |>
+  mutate(
+    month = factor(
+      month,
+      levels = c(1, 7),
+      labels = c("January", "July")
+    )
+  )
+
+station_temperature |>
+  ggplot(aes(x = year, y = mean_tmax, group = id)) +
+  geom_line(alpha = 0.2, linewidth = 0.3, na.rm = TRUE) +
+  facet_wrap(~ month) +
+  labs(
+    title = "Average maximum temperature by station and year",
+    x = "Year",
+    y = "Mean maximum temperature (°C)"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+Each line represents a weather station. The panels allow comparison
+of seasonal differences and year-to-year variation. Differences
+among stations may reflect geography, while changes shared by
+many stations may reflect regional weather patterns.
+
+```{r temperature-extremes}
+station_temperature |>
+  filter(!is.na(mean_tmax)) |>
+  group_by(month) |>
+  slice_min(mean_tmax, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  select(month, id, year, mean_tmax, observed_days) |>
+  knitr::kable(
+    digits = 1,
+    caption = "Lowest station-year mean temperature in each month"
+  )
+```
+
+The table identifies unusually low station-year averages for inspection.
+An extreme average is not necessarily an error: station location and
+the number of observed days should also be considered.
+
+## Temperature relationship and snowfall distributions
+
+```{r temperature-snowfall, fig.width=12, fig.height=6}
+temperature_plot =
+  noaa |>
+  filter(!is.na(tmin), !is.na(tmax)) |>
+  ggplot(aes(x = tmin, y = tmax)) +
+  geom_bin_2d(bins = 60) +
+  scale_fill_viridis_c(trans = "log10") +
+  labs(
+    title = "Minimum versus maximum temperature",
+    x = "Minimum temperature (°C)",
+    y = "Maximum temperature (°C)",
+    fill = "Count"
+  ) +
+  theme_minimal(base_size = 12)
+
+snowfall_plot =
+  noaa |>
+  filter(snow > 0, snow < 100) |>
+  ggplot(aes(x = factor(year), y = snow)) +
+  geom_boxplot(outlier.size = 0.3) +
+  scale_x_discrete(
+    breaks = as.character(seq(1981, 2010, by = 5))
+  ) +
+  labs(
+    title = "Positive snowfall below 100 mm",
+    x = "Year",
+    y = "Snowfall (mm)"
+  ) +
+  theme_minimal(base_size = 12)
+
+temperature_plot + snowfall_plot
+```
+
+The box plot of snowfall temperature illustrates the distribution of observed data while avoiding overlapping points that may occur in a full scatter plot.  
+The snowfall box plot compares the median, dispersion, and upper tail of positive snowfall amounts less than 100 millimeters across multiple years. Since zero snowfall events and heavy snowfall events of 100 millimeters or more are excluded, this plot does not describe total annual snowfall or the frequency of snowfall occurrences.
 
 # Problem 2
 
