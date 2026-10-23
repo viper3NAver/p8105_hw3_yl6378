@@ -13,7 +13,6 @@ knitr::opts_chunk$set(
 ```
 
 # Problem 1
-## Data description and missing values
 
 ```{r load-noaa}
 library(tidyverse)
@@ -55,7 +54,6 @@ with 43.7% of observations missing for each variable. Snow depth has
 comparisons because summaries may be based on different subsets of
 station-days.
 
-## Data cleaning and snowfall values
 
 ```{r clean-noaa}
 noaa =
@@ -93,7 +91,6 @@ Zero snowfall is expected to be common because many station-days
 have no snowfall. Common positive values may reflect rounding and
 conversion from measurements originally recorded in inches.
 
-## Average maximum temperatures in January and July
 
 ```{r monthly-temperature, fig.width=10, fig.height=5}
 station_temperature =
@@ -198,6 +195,245 @@ The snowfall boxplots compare the median, spread, and upper tails
 of positive snowfall below 100 mm across years. Because zero snowfall
 and events of 100 mm or more are excluded, this figure does not
 describe annual snowfall totals or snowfall frequency.
+
+
 # Problem 2
+
+```{r import-nhanes}
+# Find the header below any introductory metadata.
+covar_lines = read_lines("data/nhanes_covar.csv")
+
+header_row = which(
+  str_detect(covar_lines, regex("SEQN", ignore_case = TRUE))
+)[1]
+
+covar_raw =
+  read_csv(
+    "data/nhanes_covar.csv",
+    skip = header_row - 1,
+    na = c("", "NA", ".")
+  ) |>
+  rename_with(tolower)
+
+covar =
+  covar_raw |>
+  drop_na() |>
+  filter(age >= 21) |>
+  mutate(
+    sex = factor(
+      sex,
+      levels = c(1, 2),
+      labels = c("Male", "Female")
+    ),
+    education = factor(
+      education,
+      levels = c(1, 2, 3),
+      labels = c(
+        "Less than high school",
+        "High school equivalent",
+        "More than high school"
+      )
+    )
+  )
+
+accel =
+  read_csv("data/nhanes_accel.csv") |>
+  rename_with(tolower)
+
+nhanes =
+  covar |>
+  inner_join(accel, by = "seqn") |>
+  pivot_longer(
+    cols = matches("^min\\d+$"),
+    names_to = "minute",
+    names_prefix = "min",
+    values_to = "mims"
+  ) |>
+  mutate(
+    minute = as.integer(minute),
+    hour = (minute - 1) / 60
+  )
+
+participants =
+  nhanes |>
+  distinct(seqn, .keep_all = TRUE) |>
+  select(all_of(names(covar)))
+```
+
+Participants younger than 21 and those with missing demographic
+information were excluded. Sex and education were encoded as factors,
+with education ordered from less than high school to more than high
+school. Activity measurements were reshaped into one row per
+participant per minute, retaining the original demographic variables.
+
+The merged dataset contains `r n_distinct(nhanes$seqn)` participants
+and `r format(nrow(nhanes), big.mark = ",")` participant-minute
+observations. MIMS measures activity intensity, and the hour variable
+expresses time since midnight.
+
+
+```{r nhanes-demographics, fig.width=11, fig.height=5}
+demographic_counts =
+  participants |>
+  count(education, sex) |>
+  pivot_wider(
+    names_from = sex,
+    values_from = n,
+    values_fill = 0
+  )
+
+demographic_counts |>
+  knitr::kable(
+    col.names = c("Education", "Male", "Female"),
+    caption = "Participant counts by education and sex"
+  )
+
+participants |>
+  ggplot(aes(x = sex, y = age, fill = sex)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA) +
+  geom_jitter(width = 0.12, alpha = 0.5, size = 1) +
+  facet_wrap(~ education) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    title = "Age distributions by sex and education",
+    x = NULL,
+    y = "Age (years)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 10)
+  )
+
+participants |>
+  group_by(education, sex) |>
+  summarize(
+    participants = n(),
+    median_age = median(age),
+    .groups = "drop"
+  ) |>
+  knitr::kable(
+    digits = 1,
+    caption = "Participant counts and median ages"
+  )
+```
+
+The more-than-high-school group is the largest, with 115 participants
+(56 men and 59 women). The less-than-high-school group includes
+27 men and 28 women, while the high-school-equivalent group includes
+35 men and 23 women.
+
+Participants with more than a high school education are younger:
+median ages are 43.5 years for men and 41 years for women, compared
+with 60 and 61 years in the less-than-high-school group. Within the
+high-school-equivalent group, women have a higher median age than
+men (62 versus 53 years). These age differences should be considered
+when comparing activity across groups.
+
+
+```{r nhanes-total-activity, fig.width=11, fig.height=5}
+daily_activity =
+  nhanes |>
+  group_by(seqn, sex, age, education) |>
+  summarize(
+    observed_minutes = sum(!is.na(mims)),
+    total_activity = if (all(is.na(mims))) {
+      NA_real_
+    } else {
+      sum(mims, na.rm = TRUE)
+    },
+    .groups = "drop"
+  )
+
+daily_activity |>
+  summarize(
+    minimum_observed_minutes = min(observed_minutes),
+    maximum_observed_minutes = max(observed_minutes)
+  ) |>
+  knitr::kable(
+    caption = "Activity measurement coverage per participant"
+  )
+
+daily_activity |>
+  ggplot(aes(x = age, y = total_activity, color = sex)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(method = "loess", se = FALSE) +
+  facet_wrap(~ education) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    title = "Total daily activity by age, sex, and education",
+    x = "Age (years)",
+    y = "Total daily activity (MIMS)",
+    color = "Sex"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(size = 10))
+
+daily_activity |>
+  group_by(education, sex) |>
+  summarize(
+    median_total_activity = median(total_activity, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  knitr::kable(
+    digits = 1,
+    caption = "Median total daily activity by group"
+  )
+```
+All 228 participants have 1,440 observed minutes, so daily activity
+totals are based on complete 24-hour coverage.
+
+In the less-than-high-school group, men have a higher median total
+activity than women (14,935.1 versus 13,336.2 MIMS). Women have higher
+medians in the high-school-equivalent group (12,062.8 versus 11,220.8)
+and the more-than-high-school group (13,977.4 versus 11,977.5).
+Thus, the direction of the sex difference varies across education
+groups. These unadjusted summaries do not account for differences
+in age composition and do not establish causal effects.
+
+
+```{r nhanes-time-course, fig.width=11, fig.height=5}
+minute_activity =
+  nhanes |>
+  group_by(education, sex, minute, hour) |>
+  summarize(
+    mean_mims = if (all(is.na(mims))) {
+      NA_real_
+    } else {
+      mean(mims, na.rm = TRUE)
+    },
+    .groups = "drop"
+  )
+
+minute_activity |>
+  ggplot(aes(x = hour, y = mean_mims, color = sex)) +
+  geom_line(alpha = 0.25, linewidth = 0.3) +
+  geom_smooth(
+    method = "loess",
+    span = 0.15,
+    se = FALSE,
+    linewidth = 0.9
+  ) +
+  facet_wrap(~ education) +
+  scale_x_continuous(
+    breaks = seq(0, 24, by = 6),
+    limits = c(0, 24)
+  ) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    title = "Average activity throughout the day",
+    x = "Hour since midnight",
+    y = "Mean activity (MIMS)",
+    color = "Sex"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(strip.text = element_text(size = 10))
+```
+
+The three panels compare activity timing and intensity across education
+categories, with color identifying sex. Faint lines show minute-specific
+group means, while smooth curves emphasize broader daily patterns.
+These curves describe group averages rather than individual
+participants' activity trajectories.
 
 # Problem 3
