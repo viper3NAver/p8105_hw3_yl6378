@@ -151,7 +151,6 @@ neither is explained by having only a few daily observations. These
 values warrant further inspection, but station location and measurement
 quality should be checked before treating them as errors.
 
-## Temperature relationship and snowfall distributions
 
 ```{r temperature-snowfall, fig.width=12, fig.height=6}
 temperature_plot =
@@ -437,3 +436,231 @@ These curves describe group averages rather than individual
 participants' activity trajectories.
 
 # Problem 3
+
+```{r p3-import}
+library(tidyverse)
+
+dir.create("data/citibike", recursive = TRUE, showWarnings = FALSE)
+
+if (!file.exists("data/citibike.zip")) {
+  local_zip = path.expand("~/Downloads/citibike.zip")
+
+  if (file.exists(local_zip)) {
+    file.copy(local_zip, "data/citibike.zip")
+  } else {
+    download.file(
+      "https://p8105.com/data/citibike.zip",
+      "data/citibike.zip",
+      mode = "wb"
+    )
+  }
+}
+
+unzip(
+  "data/citibike.zip",
+  exdir = "data/citibike",
+  overwrite = TRUE
+)
+
+# Extract the four inner zip files.
+inner_zips = list.files(
+  "data/citibike",
+  pattern = "\\.zip$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+inner_zips = inner_zips[
+  !str_detect(inner_zips, "__MACOSX|/\\._")
+]
+
+for (zip_path in inner_zips) {
+  unzip(
+    zip_path,
+    exdir = "data/citibike",
+    overwrite = TRUE
+  )
+}
+
+csv_files = list.files(
+  "data/citibike",
+  pattern = "\\.csv$",
+  recursive = TRUE,
+  full.names = TRUE
+)
+
+csv_files = csv_files[
+  !str_detect(csv_files, "__MACOSX|/\\._")
+]
+
+csv_files = csv_files[
+  !duplicated(tolower(basename(csv_files)))
+]
+
+csv_files = csv_files[
+  basename(csv_files) %in% c(
+    "Jan 2020 Citi.csv",
+    "Jan 2024 Citi.csv",
+    "July 2020 Citi.csv",
+    "July 2024 Citi.csv"
+  )
+]
+if (length(csv_files) != 4) {
+  stop(
+    "Expected 4 distinct CSV files; found ",
+    length(csv_files),
+    ": ",
+    paste(basename(csv_files), collapse = ", ")
+  )
+}
+
+bike = map_dfr(csv_files, function(path) {
+  file_name = str_to_lower(basename(path))
+
+  read_csv(path, show_col_types = FALSE) |>
+    mutate(
+      year = as.integer(str_extract(file_name, "20\\d{2}")),
+      month = if_else(
+        str_detect(file_name, "jan"),
+        "January",
+        "July"
+      )
+    )
+}) |>
+  mutate(
+    month = factor(month, levels = c("January", "July")),
+    weekdays = factor(
+      weekdays,
+      levels = c(
+        "Monday", "Tuesday", "Wednesday",
+        "Thursday", "Friday", "Saturday", "Sunday"
+      )
+    ),
+    member_casual = factor(
+      member_casual,
+      levels = c("casual", "member"),
+      labels = c("Casual", "Member")
+    ),
+    rideable_type = factor(
+      rideable_type,
+      levels = c("classic_bike", "electric_bike"),
+      labels = c("Classic", "Electric")
+    )
+  )
+```
+
+The combined dataset contains `r format(nrow(bike), big.mark = ",")`
+rides and `r ncol(bike)` variables. Each row is one ride.
+Variables include duration in minutes, bike type, membership,
+weekday, and starting and ending stations. Year and month were
+added from file names. The data contain a 1% sample of rides
+under four hours in January and July of 2020 and 2024.
+
+## Ride counts
+
+```{r p3-counts}
+bike |>
+  count(year, month, member_casual) |>
+  pivot_wider(
+    names_from = member_casual,
+    values_from = n,
+    values_fill = 0
+  ) |>
+  arrange(year, month) |>
+  knitr::kable(
+    col.names = c("Year", "Month", "Casual", "Member"),
+    format.args = list(big.mark = ",")
+  )
+```
+
+Members account for most rides in all four periods. July has more
+rides than January in both years, and both months have more rides
+in 2024 than in 2020. July 2024 has the largest count, with 47,156 rides.
+
+
+```{r p3-stations}
+bike |>
+  filter(
+    year == 2024,
+    month == "July",
+    !is.na(start_station_name),
+    start_station_name != ""
+  ) |>
+  count(start_station_name, sort = TRUE) |>
+  slice_head(n = 5) |>
+  knitr::kable(
+    col.names = c("Starting station", "Rides"),
+    caption = "Top five starting stations in July 2024"
+  )
+```
+
+
+
+```{r p3-weekdays, fig.width=10, fig.height=5}
+median_duration =
+  bike |>
+  group_by(year, month, weekdays) |>
+  summarize(
+    median_minutes = median(duration, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+median_duration |>
+  ggplot(
+    aes(
+      x = weekdays,
+      y = median_minutes,
+      color = factor(year),
+      group = factor(year)
+    )
+  ) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  facet_wrap(~ month) +
+  scale_color_brewer(palette = "Dark2") +
+  labs(
+    x = NULL,
+    y = "Median duration (minutes)",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+Median rides are longer in July than January and shorter in 2024
+than 2020 on every weekday. Weekend medians are higher than weekday
+medians in both July samples and January 2020. January 2024 shows
+less variation, without a consistent weekend increase.
+
+```{r p3-duration, fig.width=10, fig.height=5}
+bike |>
+  filter(year == 2024) |>
+  ggplot(
+    aes(
+      x = member_casual,
+      y = duration,
+      fill = rideable_type
+    )
+  ) +
+  geom_boxplot(
+    outlier.alpha = 0.15,
+    outlier.size = 0.4,
+    position = position_dodge(width = 0.8)
+  ) +
+  facet_wrap(~ month) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    x = NULL,
+    y = "Ride duration (minutes)",
+    fill = "Bike type"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+Median durations are higher in July than January for every
+membership and bike-type group. Casual riders have longer median
+rides than members for both bike types. Among casual riders,
+classic-bike rides have higher medians than electric-bike rides;
+among members, electric-bike rides have slightly higher medians.
