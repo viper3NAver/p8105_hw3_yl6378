@@ -1,0 +1,19 @@
+---
+title: "P8105 Homework 3"
+author: "yl6378"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+# Problem 1
+
+# Problem 2
+
+# Problem 3
